@@ -38,7 +38,7 @@ class GetSubwordIndex(tf.Module):  # type: ignore
 
     @tf.function()
     def __call__(self, inputs):
-        # Get hashes ffor given subword
+        # Get hashes for given subword
         hash = HashWord()(inputs)
         # Modulo % the hash by the bucket size
         modulo_buckets = tf.math.floormod(
@@ -46,8 +46,8 @@ class GetSubwordIndex(tf.Module):  # type: ignore
         )
         # Add vocabulary length to find subword index
         return modulo_buckets + self.vocab_size
-            
-        
+
+
 class GetWordNgramIndex(tf.Module):  # type: ignore
     """
     Given a wordngram in string format, return the index of input_matrix for
@@ -69,13 +69,21 @@ class GetWordNgramIndex(tf.Module):  # type: ignore
             fn_output_signature=tf.uint32,
         )
         hashes = tf.cast(tf.cast(hashes, "int32"), "uint64")
+        # Recursively hash again each word hash
         h = tf.foldl(
-            lambda a, x: tf.cast(tf.constant(116049371, dtype="uint64")
-            * a + tf.cast(tf.cast(x, "int32"), "uint64"), "uint64"),
+            lambda a, x: tf.cast(
+                tf.constant(116049371, dtype="uint64") * a
+                + tf.cast(tf.cast(x, "int32"), "uint64"),
+                "uint64",
+            ),
             hashes[1:],
             initializer=tf.gather(hashes, 0),
         )
-        wordngram_index = tf.math.floormod(h, tf.constant(self.bucket_size, dtype="uint64"))
+        # Modulo by bucket size
+        wordngram_index = tf.math.floormod(
+            h, tf.constant(self.bucket_size, dtype="uint64")
+        )
+        # Add vocabulary length to find index in input_matrix
         return wordngram_index + self.vocab_size
 
 
@@ -112,11 +120,11 @@ class GetSubwordsIndexes(tf.Module):  # type: ignore
             fn_output_signature=tf.uint32,
         )
         return subwords_indexes
-        
-        
+
+
 class GetWordNgramIndexes(tf.Module):  # type: ignore
     """
-    Return the subword indexes in input_matrix for each of the input subwords
+    Return the indexes in input_matrix for each of the input wordngrams
     """
 
     def __init__(self, vocab_size, bucket_size, name=None):
@@ -184,7 +192,7 @@ class AddEOLTokenLayer(tf.keras.layers.Layer):  # type: ignore
 class SubwordTokenizerLayer(tf.keras.layers.Layer):  # type: ignore
     """
     Given a tensor of sentences this layer will return a ragged tensor with
-    all the tokens per sentence as indexes of input_matrix
+    all the subword tokens per sentence as indexes of input_matrix
     """
 
     def __init__(self, minn, maxn, vocab_size, bucket_size):
@@ -226,22 +234,22 @@ class SubwordTokenizerLayer(tf.keras.layers.Layer):  # type: ignore
 
 class WordNgramsTokenizerLayer(tf.keras.layers.Layer):  # type: ignore
     """
-    Returns a ragged tensor with the tokens as indexes of input_matrix, for
-    every sentence in the input tensor
+    Returns a ragged tensor with the worngram tokens as indexes of input_matrix,
+    for every sentence in the input tensor
     """
+
     def __init__(self, max_ngram_length, vocab_size, bucket_size):
         super(WordNgramsTokenizerLayer, self).__init__()
         self.max_ngram_length = max_ngram_length
         self.vocab_size = vocab_size
         self.bucket_size = bucket_size
-        
+
     def call(self, inputs):
         # Create ragged tensor with words per sentence
         sentence_tokens = tf.strings.split(inputs)
         # Make ragged tensor of word ngrams per sentence
         sentence_word_ngrams = tf.strings.ngrams(
-            sentence_tokens,
-            [i for i in range(2, self.max_ngram_length+1)]
+            sentence_tokens, [i for i in range(2, self.max_ngram_length + 1)]
         )
         # Get the indexes for each of the ngrams
         ngram_indexes = tf.ragged.map_flat_values(
@@ -264,13 +272,13 @@ class EmbeddingLayer(tf.keras.layers.Layer):  # type: ignore
         return tf.ragged.map_flat_values(tf.gather, self.embedding_matrix, inputs)
 
 
-class CombineFeaturesLayer(tf.keras.layers.Layer):  # type: ignore
+class StackFeaturesLayer(tf.keras.layers.Layer):  # type: ignore
     """
     Stack ragged tensors of features into a single feature dimension
     """
 
     def __init__(self):
-        super(CombineFeaturesLayer, self).__init__()
+        super(StackFeaturesLayer, self).__init__()
 
     def call(self, inputs):
         results = tf.ragged.stack(inputs, axis=1).merge_dims(1, 2)
@@ -291,7 +299,7 @@ class FlattenLayer(tf.keras.layers.Layer):  # type: ignore
 
 class SentenceVectorLayer(tf.keras.layers.Layer):  # type: ignore
     """
-    Returns a sentence vector by mean reduce of all the feature vectors of
+    Returns a sentence vector by reduce mean of all the feature vectors of
     each sentence in the tensor
     """
 
@@ -337,12 +345,12 @@ class PredictionLabelLayer(tf.keras.layers.Layer):  # type: ignore
         pred = tf.cast(tf.math.argmax(inputs, axis=-1), tf.int32)
         # Lookup the vector position corresponding label
         return self.table.lookup(pred)
-        
+
 
 class PredictionProbaLayer(tf.keras.layers.Layer):  # type: ignore
     """
     Given a tensor of softmaxed output class vectors, return for each the
-    corresponding label for the highest probability class
+    highest probability class
     """
 
     def __init__(self):
@@ -385,7 +393,9 @@ def build_tensorflow_model(fasttext_parameters):
     """
     inputs = tf.keras.Input((), dtype=tf.string, name="input")
     # Define the embedding layer for all features
-    embeddings_layer = EmbeddingLayer(embedding_matrix=fasttext_parameters["input_matrix"])
+    embeddings_layer = EmbeddingLayer(
+        embedding_matrix=fasttext_parameters["input_matrix"]
+    )
     # Add the </s> EOL token to the sentence
     words_layer = AddEOLTokenLayer()(inputs)
     # Get the word tokens as indexes of input_matrix
@@ -407,9 +417,7 @@ def build_tensorflow_model(fasttext_parameters):
             fasttext_parameters["bucket_size"],
         )(inputs)
         # Get embedding vectors for subword features
-        subword_embedding_layer = FlattenLayer()(
-            embeddings_layer(subword_tokens_layer)
-        )
+        subword_embedding_layer = FlattenLayer()(embeddings_layer(subword_tokens_layer))
         # Append to the sentence feature accumulator
         sentence_features.append(subword_embedding_layer)
 
@@ -419,32 +427,32 @@ def build_tensorflow_model(fasttext_parameters):
         wordngram_tokens_layer = WordNgramsTokenizerLayer(
             fasttext_parameters["wordNgrams"],
             len(fasttext_parameters["vocabulary"]),
-            fasttext_parameters["bucket_size"]
+            fasttext_parameters["bucket_size"],
         )(words_layer)
         # Get embeddings for all word ngrams
         wordngram_embedding_layer = embeddings_layer(wordngram_tokens_layer)
         # Append to the sentence feature accumulator
         sentence_features.append(wordngram_embedding_layer)
 
-    # Get all sentence features (word + subword + wordNgram embeddings)
-    sentence_features_layer = CombineFeaturesLayer()(sentence_features)
+    # Stack all sentence features (word + subword + wordNgram embeddings)
+    sentence_features_layer = StackFeaturesLayer()(sentence_features)
     # Get single sentence vector by aggregating features
     sentence_vector_layer = SentenceVectorLayer()(sentence_features_layer)
 
     # Multiply sentence vector by output weights
-    matmul_layer = LinearLayer(output_weights=fasttext_parameters["output_matrix"])(
+    linear_layer = LinearLayer(output_weights=fasttext_parameters["output_matrix"])(
         sentence_vector_layer
     )
     # Flatten output vector
-    flat_matmul_layer = tf.keras.layers.Reshape((-1,))(matmul_layer)
+    flat_linear_layer = tf.keras.layers.Reshape((-1,))(linear_layer)
     # Apply softmax to output vector
-    softmax_layer = tf.keras.layers.Softmax()(flat_matmul_layer)
+    softmax_layer = tf.keras.layers.Softmax()(flat_linear_layer)
     # Get prediction label
     labels = PredictionLabelLayer(
         indexes=range(len(fasttext_parameters["labels"])),
         labels=fasttext_parameters["labels"],
     )(softmax_layer)
-    
+
     proba = PredictionProbaLayer()(softmax_layer)
 
     return tf.keras.Model(inputs=inputs, outputs=[labels, proba])

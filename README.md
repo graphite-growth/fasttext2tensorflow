@@ -20,4 +20,5 @@ Keep in mind that the TensorFlow model must be less than 250 MB in size to be al
 ## Contact
 
 Enrique Diaz De León: enrique@graphite.com
+<br>
 Alan Salinas: alan@graphite.com
